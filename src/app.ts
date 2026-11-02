@@ -3,6 +3,7 @@ import express from "express";
 import cors from "cors";
 import "dotenv/config";
 import { connectDB, getDB } from "./config/db.js";
+import { ObjectId } from "mongodb";
 
 const app = express();
 
@@ -72,10 +73,9 @@ app.get("/api/studios/featured", async (_req, res) => {
 
 
 /**
- * GET /api/studios
+ * GET /api/studios and /api/studios?category=Photo%20Studios
  * Returns all studios, optionally filtered by category.
  *
- * Examples:
  * /api/studios
  * /api/studios?category=Photo%20Studios
  */
@@ -112,6 +112,51 @@ app.get("/api/studios", async (req, res) => {
 });
 
 
+/**
+ * GET /api/studios/:id
+ * Returns one studio by its MongoDB ObjectId.
+ */
+app.get("/api/studios/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!id || !ObjectId.isValid(id)) {
+      res.status(400).json({
+        success: false,
+        message: "Invalid studio ID",
+      });
+      return;
+    }
+
+    const db = await connectDB();
+
+    const studio = await db.collection("studios").findOne({
+      _id: new ObjectId(id),
+    });
+
+    if (!studio) {
+      res.status(404).json({
+        success: false,
+        message: "Studio not found",
+      });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      data: studio,
+    });
+  } catch (error) {
+    console.error("Failed to fetch studio details:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch studio details",
+    });
+  }
+});
+
+//Get /api/studios/test.
 // Temporary studios collection diagnostic
 app.get("/api/studios/test", async (_req, res) => {
   try {
