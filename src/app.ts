@@ -70,6 +70,48 @@ app.get("/api/studios/featured", async (_req, res) => {
   }
 });
 
+
+/**
+ * GET /api/studios
+ * Returns all studios, optionally filtered by category.
+ *
+ * Examples:
+ * /api/studios
+ * /api/studios?category=Photo%20Studios
+ */
+app.get("/api/studios", async (req, res) => {
+  try {
+    const db = await connectDB();
+
+    const category =
+      typeof req.query.category === "string"
+        ? req.query.category.trim()
+        : "";
+
+    const filter = category ? { category } : {};
+
+    const studios = await db
+      .collection("studios")
+      .find(filter)
+      .sort({ _id: -1 })
+      .toArray();
+
+    res.status(200).json({
+      success: true,
+      count: studios.length,
+      data: studios,
+    });
+  } catch (error) {
+    console.error("Failed to fetch studios:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch studios",
+    });
+  }
+});
+
+
 // Temporary studios collection diagnostic
 app.get("/api/studios/test", async (_req, res) => {
   try {
