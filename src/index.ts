@@ -1,97 +1,13 @@
 
-import express from "express";
-import cors from "cors";
 import "dotenv/config";
-import { connectDB, disconnectDB, getDB } from "./config/db.js";
-
-const app = express();
+import app from "./app.js";
+import { connectDB, disconnectDB } from "./config/db.js";
 
 const PORT = Number(process.env.PORT) || 5000;
 
-app.use(
-  cors({
-    origin: process.env.CLIENT_URL || "http://localhost:3000",
-    credentials: true,
-  })
-);
-
-app.use(express.json());
-
-// Root API
-app.get("/", (_req, res) => {
-  res.json({
-    success: true,
-    message: "StudioSpace API is running",
-  });
-});
-
-// Health check
-app.get("/api/health", (_req, res) => {
-  res.status(200).json({
-    success: true,
-    status: "healthy",
-    service: "StudioSpace API",
-  });
-});
-
-// Temporary MongoDB studios collection test
-app.get("/api/studios/test", async (_req, res) => {
-  try {
-    const db = getDB();
-
-    const count = await db
-      .collection("studios")
-      .countDocuments();
-
-    res.status(200).json({
-      success: true,
-      database: db.databaseName,
-      collection: "studios",
-      totalStudios: count,
-    });
-  } catch (error) {
-    console.error("Studio collection test failed:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Failed to access studios collection",
-    });
-  }
-});
-
-
- // api/studios/featured
- // Return up to 6 featured studios from MongoDB
-
-app.get("/api/studios/featured", async (_req, res) => {
-  try {
-    const db = getDB();
-
-    const studios = await db
-      .collection("studios")
-      .find({ isFeatured: true })
-      .limit(6)
-      .toArray();
-
-    res.status(200).json({
-      success: true,
-      count: studios.length,
-      data: studios,
-    });
-  } catch (error) {
-    console.error("Failed to fetch featured studios:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch featured studios",
-    });
-  }
-});
-
-
-// Start Express only after MongoDB connects
 async function startServer() {
   try {
+    // Connect to MongoDB before starting the local server
     await connectDB();
 
     const server = app.listen(PORT, () => {
@@ -100,12 +16,18 @@ async function startServer() {
       );
     });
 
-    const shutdown = async () => {
+    const shutdown = () => {
       console.log("Shutting down StudioSpace API...");
 
       server.close(async () => {
-        await disconnectDB();
-        process.exit(0);
+        try {
+          await disconnectDB();
+          console.log("MongoDB disconnected");
+          process.exit(0);
+        } catch (error) {
+          console.error("Shutdown failed:", error);
+          process.exit(1);
+        }
       });
     };
 
