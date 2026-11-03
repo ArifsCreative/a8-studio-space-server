@@ -4,6 +4,8 @@ import cors from "cors";
 import "dotenv/config";
 import { connectDB, getDB } from "./config/db.js";
 import { ObjectId } from "mongodb";
+import { toNodeHandler } from "better-auth/node";
+import { createAuth } from "./lib/auth.js";
 
 const app = express();
 
@@ -14,7 +16,29 @@ app.use(
   })
 );
 
+
+// BetterAuth authentication endpoints.
+// Initialize after MongoDB is connected, on the first auth request.
+let authHandler:
+  | ReturnType<typeof toNodeHandler>
+  | undefined;
+
+app.all("/api/auth/*splat", async (req, res, next) => {
+  try {
+    if (!authHandler) {
+      await connectDB();
+      authHandler = toNodeHandler(createAuth());
+    }
+
+    return authHandler(req, res);
+  } catch (error) {
+    console.error("BetterAuth request failed:", error);
+    next(error);
+  }
+});
+
 app.use(express.json());
+
 
 // Root endpoint
 app.get("/", (_req, res) => {
