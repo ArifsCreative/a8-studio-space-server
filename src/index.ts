@@ -1,7 +1,11 @@
 
 import "dotenv/config";
 import app from "./app.js";
-import { connectDB, disconnectDB } from "./config/db.js";
+import {
+  connectDB,
+  disconnectDB,
+  ensureBookingIndexes,
+} from "./config/db.js";
 
 const PORT = Number(process.env.PORT) || 5000;
 
@@ -9,6 +13,9 @@ async function startServer() {
   try {
     // Connect to MongoDB before starting the local server
     await connectDB();
+
+    // Initialize booking database indexes
+    await ensureBookingIndexes();
 
     const server = app.listen(PORT, () => {
       console.log(

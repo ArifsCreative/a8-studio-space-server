@@ -46,10 +46,57 @@ export function getDB(): Db {
   return database;
 }
 
+export function getMongoClient(): MongoClient {
+  if (!client) {
+    throw new Error("MongoDB client is not connected");
+  }
+
+  return client;
+}
+
 export async function disconnectDB(): Promise<void> {
   if (client) {
     await client.close();
     client = null;
     database = null;
   }
+}
+
+
+/**
+ * Creates indexes for efficient booking queries.
+ * Safe to call multiple times.
+ */
+export async function ensureBookingIndexes(): Promise<void> {
+  const db = await connectDB();
+
+  const bookings = db.collection("bookings");
+
+  await bookings.createIndexes([
+    {
+      key: {
+        userId: 1,
+        createdAt: -1,
+      },
+      name: "user_bookings_history",
+    },
+    {
+      key: {
+        studioId: 1,
+        status: 1,
+        startAt: 1,
+      },
+      name: "studio_active_bookings",
+    },
+    {
+      key: {
+        studioId: 1,
+        startAt: 1,
+        endAt: 1,
+      },
+      name: "studio_booking_overlap",
+    },
+  ]);
+
+  console.log("Booking database indexes created successfully.");
 }

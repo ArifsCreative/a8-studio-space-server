@@ -1,8 +1,21 @@
 
 import { Router, type Request, type Response } from "express";
 import { ObjectId } from "mongodb";
-import { connectDB } from "../config/db.js";
+import {
+    connectDB,
+    getMongoClient,
+} from "../config/db.js";
 import { verifyJWT } from "../middleware/verify-jwt.js";
+
+class BookingError extends Error {
+    constructor(
+        message: string,
+        public statusCode: number
+    ) {
+        super(message);
+        this.name = "BookingError";
+    }
+}
 
 const bookingRouter = Router();
 
@@ -12,35 +25,37 @@ const ACTIVE_BOOKING_STATUSES = ["pending", "confirmed"];
  * POST /api/bookings
  * Creates a booking for an authenticated user.
  */
+
+/**
+ * POST /api/bookings
+ * Creates a booking using MongoDB transactions.
+ * Serializes competing booking requests for the same studio.
+ */
 bookingRouter.post(
     "/",
     verifyJWT,
     async (req: Request, res: Response) => {
+        const client = getMongoClient();
+        const session = client.startSession();
+
         try {
             const { studioId, startAt, endAt } = req.body;
 
-            // Validate studio ID.
             if (
                 typeof studioId !== "string" ||
                 !ObjectId.isValid(studioId)
             ) {
-                res.status(400).json({
-                    success: false,
-                    message: "A valid studio ID is required.",
-                });
-                return;
+                throw new BookingError("A valid studio ID is required.", 400);
             }
 
-            // Validate booking dates.
             if (
                 typeof startAt !== "string" ||
                 typeof endAt !== "string"
             ) {
-                res.status(400).json({
-                    success: false,
-                    message: "Booking start and end times are required.",
-                });
-                return;
+                throw new BookingError(
+                    "Booking start and end times are required.",
+                    400
+                );
             }
 
             const startDate = new Date(startAt);
@@ -50,117 +65,141 @@ bookingRouter.post(
                 Number.isNaN(startDate.getTime()) ||
                 Number.isNaN(endDate.getTime())
             ) {
-                res.status(400).json({
-                    success: false,
-                    message: "Invalid booking date or time.",
-                });
-                return;
+                throw new BookingError("Invalid booking date or time.", 400);
             }
 
             if (startDate >= endDate) {
-                res.status(400).json({
-                    success: false,
-                    message: "End time must be later than start time.",
-                });
-                return;
+                throw new BookingError(
+                    "End time must be later than start time.",
+                    400
+                );
             }
 
             if (startDate <= new Date()) {
-                res.status(400).json({
-                    success: false,
-                    message: "Past bookings are not allowed.",
-                });
-                return;
+                throw new BookingError(
+                    "Past bookings are not allowed.",
+                    400
+                );
             }
 
             const db = await connectDB();
+            const studioObjectId = new ObjectId(studioId);
 
-            // Verify that the studio exists.
-            const studio = await db.collection("studios").findOne({
-                _id: new ObjectId(studioId),
+            let createdBooking: Record<string, unknown> | null = null;
+
+            await session.withTransaction(async () => {
+                // Write to the studio document to serialize
+                // competing transactions for the same studio.
+                const studioLock = await db.collection("studios").updateOne(
+                    { _id: studioObjectId },
+                    { $inc: { bookingVersion: 1 } },
+                    { session }
+                );
+
+                if (studioLock.matchedCount === 0) {
+                    throw new BookingError("Studio not found.", 404);
+                }
+
+                // Read the current studio pricing inside the transaction.
+                const studio = await db.collection("studios").findOne(
+                    { _id: studioObjectId },
+                    { session }
+                );
+
+                if (!studio) {
+                    throw new BookingError("Studio not found.", 404);
+                }
+
+                const hourlyRate = Number(studio.pricePerHour);
+
+                if (!Number.isFinite(hourlyRate) || hourlyRate <= 0) {
+                    throw new BookingError(
+                        "Studio pricing is unavailable.",
+                        400
+                    );
+                }
+
+                // Check overlapping active bookings inside the transaction.
+                const conflictingBooking = await db
+                    .collection("bookings")
+                    .findOne(
+                        {
+                            studioId: studioObjectId,
+                            status: { $in: ["pending", "confirmed"] },
+                            startAt: { $lt: endDate },
+                            endAt: { $gt: startDate },
+                        },
+                        { session }
+                    );
+
+                if (conflictingBooking) {
+                    throw new BookingError(
+                        "This studio is already booked for the selected time.",
+                        409
+                    );
+                }
+
+                const durationHours =
+                    (endDate.getTime() - startDate.getTime()) /
+                    (1000 * 60 * 60);
+
+                const totalPrice = Number(
+                    (hourlyRate * durationHours).toFixed(2)
+                );
+
+                const now = new Date();
+
+                const booking = {
+                    studioId: studioObjectId,
+                    userId: req.authUser!.id,
+                    startAt: startDate,
+                    endAt: endDate,
+                    hourlyRate,
+                    totalPrice,
+                    status: "pending",
+                    createdAt: now,
+                    updatedAt: now,
+                };
+
+                const result = await db
+                    .collection("bookings")
+                    .insertOne(booking, { session });
+
+                createdBooking = {
+                    _id: result.insertedId,
+                    ...booking,
+                };
             });
 
-            if (!studio) {
-                res.status(404).json({
-                    success: false,
-                    message: "Studio not found.",
-                });
-                return;
+            if (!createdBooking) {
+                throw new Error("Booking transaction completed without a booking.");
             }
-
-            const hourlyRate = Number(studio.pricePerHour);
-
-            if (!Number.isFinite(hourlyRate) || hourlyRate <= 0) {
-                res.status(400).json({
-                    success: false,
-                    message: "Studio pricing is unavailable.",
-                });
-                return;
-            }
-
-            // Calculate price on the server.
-            const durationHours =
-                (endDate.getTime() - startDate.getTime()) /
-                (1000 * 60 * 60);
-
-            const totalPrice = hourlyRate * durationHours;
-
-            // Check whether the requested time overlaps
-            // an existing pending or confirmed booking.
-            const conflictingBooking = await db
-                .collection("bookings")
-                .findOne({
-                    studioId: new ObjectId(studioId),
-                    status: { $in: ACTIVE_BOOKING_STATUSES },
-                    startAt: { $lt: endDate },
-                    endAt: { $gt: startDate },
-                });
-
-            if (conflictingBooking) {
-                res.status(409).json({
-                    success: false,
-                    message: "This studio is already booked for the selected time.",
-                });
-                return;
-            }
-
-            const now = new Date();
-
-            const booking = {
-                studioId: new ObjectId(studioId),
-                userId: req.authUser!.id,
-                startAt: startDate,
-                endAt: endDate,
-                hourlyRate,
-                totalPrice: Number(totalPrice.toFixed(2)),
-                status: "pending",
-                createdAt: now,
-                updatedAt: now,
-            };
-
-            const result = await db
-                .collection("bookings")
-                .insertOne(booking);
 
             res.status(201).json({
                 success: true,
                 message: "Booking created successfully.",
-                data: {
-                    _id: result.insertedId,
-                    ...booking,
-                },
+                data: createdBooking,
             });
         } catch (error) {
-            console.error("Booking creation failed:", error);
+            if (error instanceof BookingError) {
+                res.status(error.statusCode).json({
+                    success: false,
+                    message: error.message,
+                });
+                return;
+            }
+
+            console.error("Booking transaction failed:", error);
 
             res.status(500).json({
                 success: false,
                 message: "Failed to create booking.",
             });
+        } finally {
+            await session.endSession();
         }
     }
 );
-
 
 /**
  * GET /api/bookings/my
