@@ -6,6 +6,8 @@ import { connectDB, getDB } from "./config/db.js";
 import { ObjectId } from "mongodb";
 import { toNodeHandler } from "better-auth/node";
 import { createAuth } from "./lib/auth.js";
+import { verifyJWT } from "./middleware/verify-jwt.js";
+import bookingRouter from "./routes/booking.routes.js";
 
 const app = express();
 
@@ -39,6 +41,9 @@ app.all("/api/auth/*splat", async (req, res, next) => {
 
 app.use(express.json());
 
+// Booking API routes
+app.use("/api/bookings", bookingRouter);
+
 
 // Root endpoint
 app.get("/", (_req, res) => {
@@ -68,6 +73,21 @@ app.get("/api/health", async (_req, res) => {
     });
   }
 });
+
+
+/**
+ * GET /api/protected/test
+ * Tests JWT authentication middleware.
+ */
+app.get("/api/protected/test", verifyJWT, (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: "JWT authentication successful",
+    authenticated: true,
+    userId: req.authUser?.id,
+  });
+});
+
 
 // Featured studios
 app.get("/api/studios/featured", async (_req, res) => {
@@ -135,8 +155,34 @@ app.get("/api/studios", async (req, res) => {
   }
 });
 
+// Specific test route
+//Get /api/studios/test.
+// Temporary studios collection diagnostic
+
+app.get("/api/studios/test", async (_req, res) => {
+  try {
+    const db = await connectDB();
+
+    const count = await db.collection("studios").countDocuments();
+
+    res.status(200).json({
+      success: true,
+      database: db.databaseName,
+      collection: "studios",
+      totalStudios: count,
+    });
+  } catch (error) {
+    console.error("Studio collection test failed:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to access studios collection",
+    });
+  }
+});
 
 /**
+ * Dynamic ID route
  * GET /api/studios/:id
  * Returns one studio by its MongoDB ObjectId.
  */
@@ -176,30 +222,6 @@ app.get("/api/studios/:id", async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch studio details",
-    });
-  }
-});
-
-//Get /api/studios/test.
-// Temporary studios collection diagnostic
-app.get("/api/studios/test", async (_req, res) => {
-  try {
-    const db = await connectDB();
-
-    const count = await db.collection("studios").countDocuments();
-
-    res.status(200).json({
-      success: true,
-      database: db.databaseName,
-      collection: "studios",
-      totalStudios: count,
-    });
-  } catch (error) {
-    console.error("Studio collection test failed:", error);
-
-    res.status(500).json({
-      success: false,
-      message: "Failed to access studios collection",
     });
   }
 });
