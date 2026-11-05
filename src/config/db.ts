@@ -6,35 +6,64 @@ const dbName = process.env.MONGODB_DB_NAME || "studiospace";
 
 let client: MongoClient | null = null;
 let database: Db | null = null;
+let connectionPromise: Promise<Db> | null = null;
 
 export async function connectDB(): Promise<Db> {
   if (database) {
     return database;
   }
 
+  // Reuse an ongoing connection attempt.
+  if (connectionPromise) {
+    return connectionPromise;
+  }
+
   if (!uri || uri === "your_mongodb_atlas_connection_string") {
     throw new Error("MONGODB_URI is missing or not configured");
   }
 
-  client = new MongoClient(uri, {
-    serverSelectionTimeoutMS: 10000,
-  });
+  connectionPromise = (async () => {
+    const mongoClient = new MongoClient(uri, {
+      serverSelectionTimeoutMS: 10000,
+      maxPoolSize: 10,
+      minPoolSize: 0,
+      maxIdleTimeMS: 60000,
+    });
+
+    client = mongoClient;
+
+    try {
+      await mongoClient.connect();
+
+      const db = mongoClient.db(dbName);
+
+      await db.command({ ping: 1 });
+
+      database = db;
+
+      console.log(`MongoDB connected successfully: ${dbName}`);
+
+      return db;
+    } catch (error) {
+      if (client === mongoClient) {
+        client = null;
+        database = null;
+      }
+
+      try {
+        await mongoClient.close();
+      } catch (closeError) {
+        console.error("MongoDB cleanup failed:", closeError);
+      }
+
+      throw error;
+    }
+  })();
 
   try {
-    await client.connect();
-
-    database = client.db(dbName);
-
-    await database.command({ ping: 1 });
-
-    console.log(`MongoDB connected successfully: ${dbName}`);
-
-    return database;
-  } catch (error) {
-    await client.close();
-    client = null;
-    database = null;
-    throw error;
+    return await connectionPromise;
+  } finally {
+    connectionPromise = null;
   }
 }
 
@@ -47,7 +76,7 @@ export function getDB(): Db {
 }
 
 export function getMongoClient(): MongoClient {
-  if (!client) {
+  if (!client || !database) {
     throw new Error("MongoDB client is not connected");
   }
 
@@ -56,12 +85,16 @@ export function getMongoClient(): MongoClient {
 
 export async function disconnectDB(): Promise<void> {
   if (client) {
-    await client.close();
+    const mongoClient = client;
+
     client = null;
     database = null;
+
+    await mongoClient.close();
+
+    console.log("MongoDB disconnected successfully.");
   }
 }
-
 
 /**
  * Creates indexes for efficient booking queries.
