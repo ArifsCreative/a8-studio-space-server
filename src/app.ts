@@ -1,4 +1,3 @@
-
 import express from "express";
 import cors from "cors";
 import "dotenv/config";
@@ -119,9 +118,7 @@ app.get("/api/studios/featured", async (_req, res) => {
 /**
  * GET /api/studios and /api/studios?category=Photo%20Studios
  * Returns all studios, optionally filtered by category.
- *
  * /api/studios
- * /api/studios?category=Photo%20Studios
  */
 app.get("/api/studios", async (req, res) => {
   try {
