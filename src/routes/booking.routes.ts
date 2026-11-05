@@ -201,6 +201,103 @@ bookingRouter.post(
     }
 );
 
+
+/**
+ * GET /api/bookings/availability
+ *
+ * Query parameters:
+ * studioId - MongoDB studio ID
+ * startAt  - Start of the selected local day in UTC
+ * endAt    - End of the selected local day in UTC
+ *
+ * Returns occupied intervals without exposing customer information.
+ */
+bookingRouter.get(
+    "/availability",
+    async (req: Request, res: Response) => {
+        try {
+            const { studioId, startAt, endAt } = req.query;
+
+            if (
+                typeof studioId !== "string" ||
+                !ObjectId.isValid(studioId)
+            ) {
+                res.status(400).json({
+                    success: false,
+                    message: "A valid studio ID is required.",
+                });
+                return;
+            }
+
+            if (
+                typeof startAt !== "string" ||
+                typeof endAt !== "string"
+            ) {
+                res.status(400).json({
+                    success: false,
+                    message: "Valid availability date boundaries are required.",
+                });
+                return;
+            }
+
+            const dayStart = new Date(startAt);
+            const dayEnd = new Date(endAt);
+
+            if (
+                Number.isNaN(dayStart.getTime()) ||
+                Number.isNaN(dayEnd.getTime()) ||
+                dayStart >= dayEnd
+            ) {
+                res.status(400).json({
+                    success: false,
+                    message: "Invalid availability date range.",
+                });
+                return;
+            }
+
+            const db = await connectDB();
+
+            const unavailableSlots = await db
+                .collection("bookings")
+                .find(
+                    {
+                        studioId: new ObjectId(studioId),
+                        status: { $in: ACTIVE_BOOKING_STATUSES },
+                        startAt: { $lt: dayEnd },
+                        endAt: { $gt: dayStart },
+                    },
+                    {
+                        projection: {
+                            _id: 0,
+                            startAt: 1,
+                            endAt: 1,
+                        },
+                    }
+                )
+                .sort({ startAt: 1 })
+                .toArray();
+
+            res.status(200).json({
+                success: true,
+                data: {
+                    unavailableSlots: unavailableSlots.map((slot) => ({
+                        startAt: new Date(slot.startAt).toISOString(),
+                        endAt: new Date(slot.endAt).toISOString(),
+                    })),
+                },
+            });
+        } catch (error) {
+            console.error("Availability check failed:", error);
+
+            res.status(500).json({
+                success: false,
+                message: "Failed to check studio availability.",
+            });
+        }
+    }
+);
+
+
 /**
  * GET /api/bookings/my
  * Returns bookings belonging to the authenticated user.
